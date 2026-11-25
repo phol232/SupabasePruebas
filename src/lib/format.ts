@@ -23,7 +23,6 @@ export function buildWhatsAppOrderUrl(params: {
   items: Array<{ name: string; quantity: number; subtotal: number }>;
   total: number;
   trackingUrl: string;
-  manageUrl: string;
 }): string {
   const lines = [
     `*Nuevo Pedido #${params.orderNumber}* - ${STORE_NAME}`,
@@ -40,9 +39,6 @@ export function buildWhatsAppOrderUrl(params: {
     ),
     "",
     `*Total:* ${formatPrice(params.total)}`,
-    "",
-    `*Gestionar estado (link único del dueño):*`,
-    params.manageUrl,
     "",
     `*Seguimiento en vivo (cliente):*`,
     params.trackingUrl,

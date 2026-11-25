@@ -382,7 +382,7 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-[#F8F7F4]">
       {/* Header */}
       <header className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border-b border-stone-200">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="w-full px-4 sm:px-8 lg:px-12 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Link
               href="/"
@@ -420,7 +420,7 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-7 space-y-6">
+      <main className="w-full px-4 sm:px-8 lg:px-12 py-7 space-y-6">
         {/* Tabs */}
         <div className="flex items-center gap-2">
           <button
