@@ -130,17 +130,13 @@ export default function OrderManageClient({
     setUpdating(nextStatus);
     setFeedback(null);
     try {
-      const res = await fetch("/api/orders/status", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          order_id: order.id,
-          manage_token: manageToken,
-          status: nextStatus,
-        }),
+      const supabase = getSupabaseClient();
+      const { error } = await supabase.rpc("update_order_status_by_token", {
+        p_order_id: order.id,
+        p_manage_token: manageToken,
+        p_status: nextStatus,
       });
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(data.error || "No se pudo actualizar.");
+      if (error) throw new Error(error.message);
 
       setOrder((prev) => ({ ...prev, status: nextStatus }));
       setFeedback(
@@ -166,7 +162,7 @@ export default function OrderManageClient({
             Link único de gestión · {STORE_NAME}
           </div>
           <Link
-            href={`/pedido/${order.id}?token=${order.tracking_token}`}
+            href={`/pedido?id=${order.id}&token=${order.tracking_token}`}
             target="_blank"
             className="inline-flex items-center gap-1 text-xs font-semibold text-zinc-600 hover:text-zinc-900"
           >

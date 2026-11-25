@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   Plus,
   Pencil,
@@ -29,11 +28,7 @@ import {
   type Product,
 } from "@/types/store";
 
-interface AdminDashboardProps {
-  initialAuthenticated: boolean;
-  initialProducts: Product[];
-  initialOrders: Order[];
-}
+const ADMIN_SESSION_KEY = "tienda_admin_unlocked_v1";
 
 interface ProductFormState {
   id: string | null;
@@ -57,20 +52,14 @@ const EMPTY_FORM: ProductFormState = {
   is_active: true,
 };
 
-export default function AdminDashboard({
-  initialAuthenticated,
-  initialProducts,
-  initialOrders,
-}: AdminDashboardProps) {
-  const router = useRouter();
-  const [authenticated, setAuthenticated] = useState(initialAuthenticated);
+export default function AdminDashboard() {
+  const [authenticated, setAuthenticated] = useState(false);
   const [pin, setPin] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
 
   const [activeTab, setActiveTab] = useState<"products" | "orders">("products");
-  const [products, setProducts] = useState<Product[]>(initialProducts);
-  const [orders, setOrders] = useState<Order[]>(initialOrders);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
 
   // Product modal
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -80,10 +69,36 @@ export default function AdminDashboard({
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Realtime orders when authenticated
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(ADMIN_SESSION_KEY) === "1") {
+        setAuthenticated(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Load initial data + subscribe/poll orders when authenticated
   useEffect(() => {
     if (!authenticated) return;
     const supabase = getSupabaseClient();
+
+    (async () => {
+      const [productsRes, ordersRes] = await Promise.all([
+        supabase
+          .from("products")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("orders")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(30),
+      ]);
+      if (productsRes.data) setProducts(productsRes.data as Product[]);
+      if (ordersRes.data) setOrders(ordersRes.data as Order[]);
+    })();
 
     if (process.env.NEXT_PUBLIC_ENABLE_REALTIME !== "true") {
       const timer = setInterval(async () => {
@@ -130,7 +145,7 @@ export default function AdminDashboard({
     return () => {
       if (channel) {
         try {
-          getSupabaseClient().removeChannel(channel);
+          supabase.removeChannel(channel);
         } catch {
           // ignore
         }
@@ -138,33 +153,28 @@ export default function AdminDashboard({
     };
   }, [authenticated]);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    setAuthLoading(true);
-    try {
-      const res = await fetch("/api/admin/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin }),
-      });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok) {
-        throw new Error(data.error || "PIN incorrecto");
-      }
-      setAuthenticated(true);
-      router.refresh();
-    } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : "Error de autenticación"
-      );
-    } finally {
-      setAuthLoading(false);
+    const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || "1234").trim();
+    if (pin.trim() !== expectedPin) {
+      setAuthError("PIN incorrecto");
+      return;
     }
+    try {
+      sessionStorage.setItem(ADMIN_SESSION_KEY, "1");
+    } catch {
+      // ignore
+    }
+    setAuthenticated(true);
   };
 
-  const handleLogout = async () => {
-    await fetch("/api/admin/auth", { method: "DELETE" });
+  const handleLogout = () => {
+    try {
+      sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    } catch {
+      // ignore
+    }
     setAuthenticated(false);
     setPin("");
   };
@@ -196,17 +206,26 @@ export default function AdminDashboard({
     setUploadingImage(true);
     setFormError(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/admin/upload", {
-        method: "POST",
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || "No se pudo subir la imagen");
-      }
-      setForm((prev) => ({ ...prev, image_url: data.url! }));
+      const supabase = getSupabaseClient();
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const fileName = `prod-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("product-images")
+        .upload(fileName, file, {
+          contentType: file.type || "image/jpeg",
+          upsert: false,
+        });
+
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: publicUrlData } = supabase.storage
+        .from("product-images")
+        .getPublicUrl(fileName);
+
+      setForm((prev) => ({ ...prev, image_url: publicUrlData.publicUrl }));
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Error subiendo imagen"
@@ -221,35 +240,42 @@ export default function AdminDashboard({
     setSavingProduct(true);
     setFormError(null);
     try {
-      const res = await fetch("/api/admin/products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: form.id,
-          name: form.name,
-          description: form.description,
-          price: parseFloat(form.price) || 0,
-          stock: parseInt(form.stock, 10) || 0,
-          category: form.category,
-          image_url: form.image_url || null,
-          is_active: form.is_active,
-        }),
-      });
-      const data = (await res.json()) as {
-        product?: Product;
-        error?: string;
-      };
-      if (!res.ok || !data.product) {
-        throw new Error(data.error || "No se pudo guardar el producto");
+      if (!form.name.trim()) {
+        throw new Error("El nombre del producto es obligatorio");
       }
 
+      const supabase = getSupabaseClient();
+      const payload = {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        price: parseFloat(form.price) || 0,
+        stock: parseInt(form.stock, 10) || 0,
+        category: form.category.trim() || "General",
+        image_url: form.image_url.trim() || null,
+        is_active: form.is_active,
+      };
+
       if (form.id) {
+        const { data, error } = await supabase
+          .from("products")
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq("id", form.id)
+          .select()
+          .single();
+        if (error || !data) throw new Error(error?.message || "No se pudo actualizar");
         setProducts((prev) =>
-          prev.map((p) => (p.id === data.product!.id ? data.product! : p))
+          prev.map((p) => (p.id === (data as Product).id ? (data as Product) : p))
         );
       } else {
-        setProducts((prev) => [data.product!, ...prev]);
+        const { data, error } = await supabase
+          .from("products")
+          .insert(payload)
+          .select()
+          .single();
+        if (error || !data) throw new Error(error?.message || "No se pudo crear");
+        setProducts((prev) => [data as Product, ...prev]);
       }
+
       setIsModalOpen(false);
     } catch (err) {
       setFormError(
@@ -262,10 +288,9 @@ export default function AdminDashboard({
 
   const handleDeleteProduct = async (id: string) => {
     if (!confirm("¿Eliminar este producto?")) return;
-    const res = await fetch(`/api/admin/products?id=${id}`, {
-      method: "DELETE",
-    });
-    if (res.ok) {
+    const supabase = getSupabaseClient();
+    const { error } = await supabase.from("products").delete().eq("id", id);
+    if (!error) {
       setProducts((prev) => prev.filter((p) => p.id !== id));
     }
   };
@@ -275,16 +300,13 @@ export default function AdminDashboard({
     nextStatus: OrderStatus
   ) => {
     if (!order.manage_token) return;
-    const res = await fetch("/api/orders/status", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        order_id: order.id,
-        manage_token: order.manage_token,
-        status: nextStatus,
-      }),
+    const supabase = getSupabaseClient();
+    const { error } = await supabase.rpc("update_order_status_by_token", {
+      p_order_id: order.id,
+      p_manage_token: order.manage_token,
+      p_status: nextStatus,
     });
-    if (res.ok) {
+    if (!error) {
       setOrders((prev) =>
         prev.map((o) => (o.id === order.id ? { ...o, status: nextStatus } : o))
       );
@@ -293,7 +315,7 @@ export default function AdminDashboard({
 
   const copyManageLink = (order: Order) => {
     if (!order.manage_token) return;
-    const url = `${window.location.origin}/gestion/${order.id}?token=${order.manage_token}`;
+    const url = `${window.location.origin}/gestion?id=${order.id}&token=${order.manage_token}`;
     navigator.clipboard.writeText(url);
     setCopiedId(order.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -346,10 +368,9 @@ export default function AdminDashboard({
             )}
             <button
               type="submit"
-              disabled={authLoading}
               className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-emerald-600 text-white text-sm font-bold transition-colors cursor-pointer"
             >
-              {authLoading ? "Verificando..." : "Entrar al panel"}
+              Entrar al panel
             </button>
           </form>
         </div>
@@ -578,7 +599,7 @@ export default function AdminDashboard({
                       </button>
 
                       <Link
-                        href={`/pedido/${order.id}?token=${order.tracking_token}`}
+                        href={`/pedido?id=${order.id}&token=${order.tracking_token}`}
                         target="_blank"
                         className="p-2 rounded-xl border border-stone-200 hover:bg-stone-100 text-zinc-600"
                         title="Ver seguimiento del cliente"

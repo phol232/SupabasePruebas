@@ -31,13 +31,10 @@ import type { CartItem, Product } from "@/types/store";
 
 const CART_STORAGE_KEY = "tienda_rapida_cart_v1";
 
-interface StorefrontProps {
-  initialProducts: Product[];
-}
-
-export default function Storefront({ initialProducts }: StorefrontProps) {
+export default function Storefront() {
   const router = useRouter();
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartHydrated, setCartHydrated] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -78,6 +75,31 @@ export default function Storefront({ initialProducts }: StorefrontProps) {
       // ignore storage errors
     }
   }, [cart, cartHydrated]);
+
+  // Fetch active products on mount (100% static compatible)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = getSupabaseClient();
+        const { data } = await supabase
+          .from("products")
+          .select("*")
+          .eq("is_active", true)
+          .order("created_at", { ascending: false });
+        if (!cancelled && data) {
+          setProducts(data as Product[]);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoadingProducts(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Subscribe to realtime product/stock updates (only when Realtime WS is enabled)
   useEffect(() => {
@@ -223,50 +245,38 @@ export default function Storefront({ initialProducts }: StorefrontProps) {
 
     setSubmitting(true);
     try {
+      const supabase = getSupabaseClient();
       const payloadItems = cart.map((item) => ({
         product_id: item.product.id,
         quantity: item.quantity,
       }));
 
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_name: customerName.trim(),
-          customer_phone: customerPhone.trim(),
-          delivery_address: deliveryAddress.trim(),
-          notes: notes.trim(),
-          items: payloadItems,
-        }),
+      const { data, error } = await supabase.rpc("create_order_with_items", {
+        p_customer_name: customerName.trim(),
+        p_customer_phone: customerPhone.trim(),
+        p_delivery_address: deliveryAddress.trim(),
+        p_notes: notes.trim(),
+        p_items: payloadItems,
       });
 
-      const data = (await res.json()) as {
-        order_id?: string;
-        order_number?: number;
-        total?: number;
-        tracking_token?: string;
-        manage_token?: string;
-        error?: string;
-      };
-
-      if (!res.ok || !data.order_id) {
-        throw new Error(data.error || "No se pudo registrar el pedido.");
+      if (error || !data) {
+        throw new Error(error?.message || "No se pudo registrar el pedido.");
       }
 
-      const result = {
-        order_id: data.order_id,
-        order_number: data.order_number!,
-        total: data.total!,
-        tracking_token: data.tracking_token!,
-        manage_token: data.manage_token!,
+      const result = data as {
+        order_id: string;
+        order_number: number;
+        total: number;
+        tracking_token: string;
+        manage_token: string;
       };
 
       const origin =
         process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
         window.location.origin;
-      const trackingPath = `/pedido/${result.order_id}?token=${result.tracking_token}`;
+      const trackingPath = `/pedido?id=${result.order_id}&token=${result.tracking_token}`;
       const trackingUrl = `${origin}${trackingPath}`;
-      const manageUrl = `${origin}/gestion/${result.order_id}?token=${result.manage_token}`;
+      const manageUrl = `${origin}/gestion?id=${result.order_id}&token=${result.manage_token}`;
 
       const whatsappUrl = buildWhatsAppOrderUrl({
         orderNumber: result.order_number,
@@ -403,7 +413,16 @@ export default function Storefront({ initialProducts }: StorefrontProps) {
         </section>
 
         {/* Product Grid */}
-        {filteredProducts.length === 0 ? (
+        {loadingProducts ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 pb-20 sm:pb-6">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className="h-80 rounded-2xl bg-white border border-stone-200 animate-pulse"
+              />
+            ))}
+          </div>
+        ) : filteredProducts.length === 0 ? (
           <div className="rounded-3xl bg-white border border-stone-200 p-12 text-center">
             <PackageCheck className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
             <h2 className="text-base font-semibold text-zinc-800">
