@@ -21,6 +21,7 @@ import {
   Mail,
   KeyRound,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import {
   adminDeleteProduct,
@@ -99,7 +100,7 @@ export default function AdminDashboard() {
     setCheckingSession(false);
   }, []);
 
-  // Load initial data + poll orders when authenticated
+  // Load initial data once when authenticated (no background polling loop)
   useEffect(() => {
     if (!session?.access_token) return;
     const token = session.access_token;
@@ -118,18 +119,22 @@ export default function AdminDashboard() {
         setSession(null);
       }
     })();
-
-    const timer = setInterval(async () => {
-      try {
-        const ords = await fetchOrdersAdmin(token);
-        setOrders(ords);
-      } catch {
-        // ignore transient error
-      }
-    }, 5000);
-
-    return () => clearInterval(timer);
   }, [session?.access_token]);
+
+  const [refreshingOrders, setRefreshingOrders] = useState(false);
+
+  const handleRefreshOrders = async () => {
+    if (!session?.access_token) return;
+    setRefreshingOrders(true);
+    try {
+      const ords = await fetchOrdersAdmin(session.access_token);
+      setOrders(ords);
+    } catch {
+      // ignore
+    } finally {
+      setRefreshingOrders(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -423,29 +428,44 @@ export default function AdminDashboard() {
 
       <main className="w-full px-4 sm:px-8 lg:px-12 py-7 space-y-6">
         {/* Tabs */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveTab("products")}
-            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
-              activeTab === "products"
-                ? "bg-zinc-900 text-white shadow-xs"
-                : "bg-white text-zinc-600 border border-stone-200 hover:text-zinc-900"
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            Productos ({products.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("orders")}
-            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
-              activeTab === "orders"
-                ? "bg-zinc-900 text-white shadow-xs"
-                : "bg-white text-zinc-600 border border-stone-200 hover:text-zinc-900"
-            }`}
-          >
-            <ClipboardList className="w-4 h-4" />
-            Pedidos ({orders.length})
-          </button>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab("products")}
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+                activeTab === "products"
+                  ? "bg-zinc-900 text-white shadow-xs"
+                  : "bg-white text-zinc-600 border border-stone-200 hover:text-zinc-900"
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              Productos ({products.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("orders")}
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+                activeTab === "orders"
+                  ? "bg-zinc-900 text-white shadow-xs"
+                  : "bg-white text-zinc-600 border border-stone-200 hover:text-zinc-900"
+              }`}
+            >
+              <ClipboardList className="w-4 h-4" />
+              Pedidos ({orders.length})
+            </button>
+          </div>
+
+          {activeTab === "orders" && (
+            <button
+              onClick={handleRefreshOrders}
+              disabled={refreshingOrders}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-stone-200 hover:bg-stone-50 text-xs font-bold text-zinc-700 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${refreshingOrders ? "animate-spin" : ""}`}
+              />
+              {refreshingOrders ? "Actualizando..." : "Actualizar pedidos"}
+            </button>
+          )}
         </div>
 
         {/* Products Tab */}
