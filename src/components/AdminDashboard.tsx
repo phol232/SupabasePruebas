@@ -18,8 +18,11 @@ import {
   X,
   Eye,
   EyeOff,
+  Mail,
+  KeyRound,
+  Loader2,
 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import { getAdminSupabaseClient } from "@/lib/supabase";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import {
   ORDER_STATUS_CONFIG,
@@ -27,8 +30,6 @@ import {
   type OrderStatus,
   type Product,
 } from "@/types/store";
-
-const ADMIN_SESSION_KEY = "tienda_admin_unlocked_v1";
 
 interface ProductFormState {
   id: string | null;
@@ -53,8 +54,13 @@ const EMPTY_FORM: ProductFormState = {
 };
 
 export default function AdminDashboard() {
+  const [checkingSession, setCheckingSession] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
-  const [pin, setPin] = useState("");
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"products" | "orders">("products");
@@ -69,20 +75,37 @@ export default function AdminDashboard() {
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Check Supabase Auth session on mount
   useEffect(() => {
-    try {
-      if (sessionStorage.getItem(ADMIN_SESSION_KEY) === "1") {
-        setAuthenticated(true);
+    const supabase = getAdminSupabaseClient();
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        const session = data.session;
+        setAuthenticated(Boolean(session));
+        setUserEmail(session?.user?.email ?? null);
+      })
+      .finally(() => {
+        setCheckingSession(false);
+      });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setAuthenticated(Boolean(session));
+        setUserEmail(session?.user?.email ?? null);
       }
-    } catch {
-      // ignore
-    }
+    );
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   // Load initial data + subscribe/poll orders when authenticated
   useEffect(() => {
     if (!authenticated) return;
-    const supabase = getSupabaseClient();
+    const supabase = getAdminSupabaseClient();
 
     (async () => {
       const [productsRes, ordersRes] = await Promise.all([
@@ -112,7 +135,7 @@ export default function AdminDashboard() {
       return () => clearInterval(timer);
     }
 
-    let channel: ReturnType<ReturnType<typeof getSupabaseClient>["channel"]> | null =
+    let channel: ReturnType<ReturnType<typeof getAdminSupabaseClient>["channel"]> | null =
       null;
     try {
       channel = supabase
@@ -153,30 +176,35 @@ export default function AdminDashboard() {
     };
   }, [authenticated]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || "1234").trim();
-    if (pin.trim() !== expectedPin) {
-      setAuthError("PIN incorrecto");
-      return;
-    }
+    setAuthLoading(true);
     try {
-      sessionStorage.setItem(ADMIN_SESSION_KEY, "1");
-    } catch {
-      // ignore
+      const supabase = getAdminSupabaseClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) {
+        throw new Error("Correo o contraseña incorrectos.");
+      }
+      setPassword("");
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : "No se pudo iniciar sesión."
+      );
+    } finally {
+      setAuthLoading(false);
     }
-    setAuthenticated(true);
   };
 
-  const handleLogout = () => {
-    try {
-      sessionStorage.removeItem(ADMIN_SESSION_KEY);
-    } catch {
-      // ignore
-    }
+  const handleLogout = async () => {
+    const supabase = getAdminSupabaseClient();
+    await supabase.auth.signOut();
     setAuthenticated(false);
-    setPin("");
+    setProducts([]);
+    setOrders([]);
   };
 
   const openCreateModal = () => {
@@ -206,7 +234,7 @@ export default function AdminDashboard() {
     setUploadingImage(true);
     setFormError(null);
     try {
-      const supabase = getSupabaseClient();
+      const supabase = getAdminSupabaseClient();
       const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
       const fileName = `prod-${Date.now()}-${Math.random()
         .toString(36)
@@ -244,7 +272,7 @@ export default function AdminDashboard() {
         throw new Error("El nombre del producto es obligatorio");
       }
 
-      const supabase = getSupabaseClient();
+      const supabase = getAdminSupabaseClient();
       const payload = {
         name: form.name.trim(),
         description: form.description.trim(),
@@ -262,7 +290,9 @@ export default function AdminDashboard() {
           .eq("id", form.id)
           .select()
           .single();
-        if (error || !data) throw new Error(error?.message || "No se pudo actualizar");
+        if (error || !data) {
+          throw new Error(error?.message || "No se pudo actualizar");
+        }
         setProducts((prev) =>
           prev.map((p) => (p.id === (data as Product).id ? (data as Product) : p))
         );
@@ -272,7 +302,9 @@ export default function AdminDashboard() {
           .insert(payload)
           .select()
           .single();
-        if (error || !data) throw new Error(error?.message || "No se pudo crear");
+        if (error || !data) {
+          throw new Error(error?.message || "No se pudo crear");
+        }
         setProducts((prev) => [data as Product, ...prev]);
       }
 
@@ -288,7 +320,7 @@ export default function AdminDashboard() {
 
   const handleDeleteProduct = async (id: string) => {
     if (!confirm("¿Eliminar este producto?")) return;
-    const supabase = getSupabaseClient();
+    const supabase = getAdminSupabaseClient();
     const { error } = await supabase.from("products").delete().eq("id", id);
     if (!error) {
       setProducts((prev) => prev.filter((p) => p.id !== id));
@@ -300,7 +332,7 @@ export default function AdminDashboard() {
     nextStatus: OrderStatus
   ) => {
     if (!order.manage_token) return;
-    const supabase = getSupabaseClient();
+    const supabase = getAdminSupabaseClient();
     const { error } = await supabase.rpc("update_order_status_by_token", {
       p_order_id: order.id,
       p_manage_token: order.manage_token,
@@ -321,6 +353,17 @@ export default function AdminDashboard() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-[#F8F7F4] flex items-center justify-center p-4">
+        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-600">
+          <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+          Verificando acceso...
+        </div>
+      </div>
+    );
+  }
+
   if (!authenticated) {
     return (
       <div className="min-h-screen bg-[#F8F7F4] flex items-center justify-center p-4">
@@ -334,7 +377,7 @@ export default function AdminDashboard() {
               className="text-xs font-semibold text-zinc-500 hover:text-zinc-900 inline-flex items-center gap-1"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              Ir a la tienda
+              Volver a la tienda
             </Link>
           </div>
 
@@ -343,30 +386,59 @@ export default function AdminDashboard() {
               Acceso Administrativo
             </h1>
             <p className="text-xs text-zinc-500 mt-1">
-              Ingresa tu PIN de seguridad para administrar el catálogo y los pedidos de la tienda.
+              Inicia sesión con tu cuenta de administrador para gestionar el
+              catálogo y los pedidos.
             </p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-3.5">
-            <input
-              type="password"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="PIN de acceso"
-              autoFocus
-              required
-              className="w-full px-4 py-3 rounded-xl border border-stone-200 text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-            />
+            <div>
+              <label className="block text-xs font-semibold text-zinc-600 mb-1">
+                Correo electrónico
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@tutienda.com"
+                  autoFocus
+                  required
+                  className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-600 mb-1">
+                Contraseña
+              </label>
+              <div className="relative">
+                <KeyRound className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
             {authError && (
               <p className="text-xs font-semibold text-rose-600 text-center">
                 {authError}
               </p>
             )}
+
             <button
               type="submit"
-              className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-emerald-600 text-white text-sm font-bold transition-colors cursor-pointer"
+              disabled={authLoading}
+              className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-emerald-600 disabled:opacity-60 text-white text-sm font-bold transition-colors cursor-pointer"
             >
-              Entrar al panel
+              {authLoading ? "Ingresando..." : "Iniciar sesión"}
             </button>
           </form>
         </div>
@@ -392,7 +464,9 @@ export default function AdminDashboard() {
                 Panel de {STORE_NAME}
               </h1>
               <span className="text-[11px] text-zinc-500">
-                Gestión de catálogo y pedidos
+                {userEmail
+                  ? `Sesión: ${userEmail}`
+                  : "Gestión de catálogo y pedidos"}
               </span>
             </div>
           </div>
@@ -445,7 +519,7 @@ export default function AdminDashboard() {
 
         {/* Products Tab */}
         {activeTab === "products" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {products.map((product) => (
               <div
                 key={product.id}

@@ -1,8 +1,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let browserClient: SupabaseClient | null = null;
+let adminClient: SupabaseClient | null = null;
 
-export function getSupabaseClient(): SupabaseClient {
+function getCredentials() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -11,6 +12,12 @@ export function getSupabaseClient(): SupabaseClient {
       "Faltan NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY en tu archivo .env"
     );
   }
+
+  return { url, anonKey };
+}
+
+export function getSupabaseClient(): SupabaseClient {
+  const { url, anonKey } = getCredentials();
 
   if (typeof window === "undefined") {
     return createClient(url, anonKey, {
@@ -36,18 +43,29 @@ export function getSupabaseClient(): SupabaseClient {
   return browserClient;
 }
 
-export function getServerSupabaseClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+export function getAdminSupabaseClient(): SupabaseClient {
+  const { url, anonKey } = getCredentials();
 
-  if (!url || (!serviceKey && !anonKey)) {
-    throw new Error(
-      "Faltan credenciales de Supabase en el archivo .env"
-    );
+  if (typeof window === "undefined") {
+    return createClient(url, anonKey, {
+      auth: { persistSession: false },
+    });
   }
 
-  return createClient(url, serviceKey || anonKey!, {
-    auth: { persistSession: false },
-  });
+  if (!adminClient) {
+    adminClient = createClient(url, anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+  }
+
+  return adminClient;
 }
