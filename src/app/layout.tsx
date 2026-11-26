@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: `${STORE_NAME} — Catálogo y Pedidos por WhatsApp`,
+  title: `${STORE_NAME} — Tienda Online`,
   description:
-    "Arma tu carrito sin registrarte, envía tu pedido por WhatsApp y sigue el estado en tiempo real.",
+    "Descubre nuestros productos y realiza tu pedido de forma rápida y segura.",
 };
 
 export default function RootLayout({

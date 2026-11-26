@@ -122,7 +122,7 @@ export default function OrderTrackingClient({
                 liveConnected ? "text-emerald-500 animate-pulse" : "text-zinc-400"
               }`}
             />
-            {liveConnected ? "En vivo" : "Conectando..."}
+            {liveConnected ? "Actualizado" : "Sincronizando..."}
           </div>
         </div>
 

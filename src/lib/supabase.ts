@@ -20,6 +20,11 @@ export function getSupabaseClient(): SupabaseClient {
 
   if (!browserClient) {
     browserClient = createClient(url, anonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
       realtime: {
         params: {
           eventsPerSecond: 10,

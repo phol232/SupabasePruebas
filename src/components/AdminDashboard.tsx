@@ -340,14 +340,10 @@ export default function AdminDashboard() {
 
           <div>
             <h1 className="text-xl font-extrabold text-zinc-900">
-              Panel Privado
+              Acceso Administrativo
             </h1>
             <p className="text-xs text-zinc-500 mt-1">
-              Ingresa el PIN de administrador configurado en tu archivo{" "}
-              <code className="font-mono bg-stone-100 px-1 py-0.5 rounded">
-                .env
-              </code>{" "}
-              (por defecto: <code className="font-mono">1234</code>).
+              Ingresa tu PIN de seguridad para administrar el catálogo y los pedidos de la tienda.
             </p>
           </div>
 
@@ -396,7 +392,7 @@ export default function AdminDashboard() {
                 Panel de {STORE_NAME}
               </h1>
               <span className="text-[11px] text-zinc-500">
-                Catálogo, stock y pedidos en tiempo real
+                Gestión de catálogo y pedidos
               </span>
             </div>
           </div>
@@ -655,7 +651,7 @@ export default function AdminDashboard() {
                 <div className="flex-1 space-y-2">
                   <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-xs font-bold text-zinc-800 cursor-pointer">
                     <Upload className="w-4 h-4" />
-                    {uploadingImage ? "Subiendo..." : "Subir foto a Supabase"}
+                    {uploadingImage ? "Subiendo..." : "Subir imagen"}
                     <input
                       type="file"
                       accept="image/*"

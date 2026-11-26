@@ -11,7 +11,6 @@ import {
   Trash2,
   X,
   MessageCircle,
-  Lock,
   Sparkles,
   PackageCheck,
   MapPin,
@@ -352,9 +351,9 @@ export default function Storefront() {
       <div className="w-full bg-zinc-950 text-zinc-200 text-xs py-2 px-4 sm:px-8 lg:px-12">
         <div className="w-full flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 truncate">
-            <span className="inline-flex w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="inline-flex w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
             <span className="truncate font-medium">
-              Pedidos directos por WhatsApp · Sin crear cuenta · Seguimiento en vivo
+              Envíos a domicilio · Atención personalizada por WhatsApp
             </span>
           </div>
           <a
@@ -382,7 +381,7 @@ export default function Storefront() {
                 {STORE_NAME}
               </span>
               <span className="text-[11px] text-zinc-500 font-medium">
-                Catálogo Express
+                Tienda Online
               </span>
             </div>
           </Link>
@@ -412,14 +411,6 @@ export default function Storefront() {
 
           {/* Right Actions */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <Link
-              href="/admin"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-zinc-600 hover:text-zinc-900 hover:bg-stone-100 border border-transparent hover:border-stone-200 transition-all"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Panel Dueño</span>
-            </Link>
-
             <button
               onClick={() => setIsCartOpen(true)}
               className="relative inline-flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-zinc-900 text-white text-sm font-semibold hover:bg-emerald-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer"
@@ -447,18 +438,17 @@ export default function Storefront() {
           <div className="lg:col-span-7 space-y-5">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-xs font-bold tracking-wide">
               <Sparkles className="w-3.5 h-3.5" />
-              TIENDA RÁPIDA · CERO COMISIONES
+              CATÁLOGO SELECCIONADO · COMPRA DIRECTA
             </div>
 
             <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight leading-[1.1]">
-              Tus productos favoritos,{" "}
-              <span className="text-emerald-400">al instante por WhatsApp.</span>
+              Calidad seleccionada,{" "}
+              <span className="text-emerald-400">directo a tu puerta.</span>
             </h1>
 
             <p className="text-sm sm:text-base text-zinc-300 max-w-2xl leading-relaxed">
-              Arma tu carrito sin registrarte, ingresa tu dirección y envía tu
-              orden en un clic. Recibe un enlace en tiempo real para ver cuando
-              esté en preparación y en camino.
+              Explora nuestros productos disponibles, arma tu pedido en segundos y
+              coordina la entrega directamente con nuestro equipo por WhatsApp.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 pt-1">
@@ -484,15 +474,15 @@ export default function Storefront() {
             <div className="grid grid-cols-3 gap-4 pt-4 border-t border-white/10 max-w-xl">
               <div className="flex items-center gap-2 text-xs text-zinc-300">
                 <Zap className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Sin registro</span>
+                <span>Compra sin registro</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-zinc-300">
                 <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Estado en vivo</span>
+                <span>Seguimiento de pedido</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-zinc-300">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Trato directo</span>
+                <span>Atención directa</span>
               </div>
             </div>
           </div>
@@ -793,16 +783,10 @@ export default function Storefront() {
               {STORE_NAME}
             </div>
             <p className="text-xs text-zinc-500">
-              Catálogo rápido con pedidos directos por WhatsApp y seguimiento en vivo.
+              Productos seleccionados con atención personalizada y envío rápido.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/admin"
-              className="px-4 py-2 rounded-xl bg-[#F6F5F1] hover:bg-stone-200 text-xs font-bold text-zinc-700 transition-colors"
-            >
-              Panel del dueño
-            </Link>
             <a
               href={`https://wa.me/${WHATSAPP_NUMBER}`}
               target="_blank"
@@ -1113,7 +1097,7 @@ export default function Storefront() {
                     : "Pedir por WhatsApp"}
                 </button>
                 <p className="text-[11px] text-center text-zinc-400">
-                  Se guardará tu pedido y abrirá WhatsApp con el resumen listo.
+                  Al confirmar, te redirigiremos a WhatsApp para finalizar tu pedido.
                 </p>
               </div>
             )}
