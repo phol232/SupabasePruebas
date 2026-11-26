@@ -14,7 +14,7 @@ import {
   ExternalLink,
   ShieldCheck,
 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import { fetchOrderById, updateOrderStatus } from "@/lib/api";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import { ORDER_STATUS_CONFIG, type Order, type OrderStatus } from "@/types/store";
 
@@ -70,58 +70,26 @@ export default function OrderManageClient({
   const [feedback, setFeedback] = useState<string | null>(null);
 
   useEffect(() => {
-    const supabase = getSupabaseClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
     let stopped = false;
 
-    const startPolling = () => {
-      if (pollTimer || stopped) return;
-      pollTimer = setInterval(async () => {
-        const { data } = await supabase
-          .from("orders")
-          .select("status, updated_at")
-          .eq("id", order.id)
-          .single();
-        if (data && !stopped) {
-          setOrder((prev) => ({ ...prev, ...data }));
+    const pollTimer = setInterval(async () => {
+      try {
+        const fresh = await fetchOrderById(order.id);
+        if (fresh && !stopped) {
+          setOrder((prev) => ({
+            ...prev,
+            status: fresh.status,
+            updated_at: fresh.updated_at,
+          }));
         }
-      }, 4000);
-    };
-
-    if (process.env.NEXT_PUBLIC_ENABLE_REALTIME !== "true") {
-      startPolling();
-      return () => {
-        stopped = true;
-        if (pollTimer) clearInterval(pollTimer);
-      };
-    }
-
-    const channel = supabase
-      .channel(`order-manage-${order.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "orders",
-          filter: `id=eq.${order.id}`,
-        },
-        (payload) => {
-          const updated = payload.new as Partial<Order>;
-          setOrder((prev) => ({ ...prev, ...updated }));
-        }
-      )
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          supabase.removeChannel(channel);
-          startPolling();
-        }
-      });
+      } catch {
+        // ignore
+      }
+    }, 4000);
 
     return () => {
       stopped = true;
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
+      clearInterval(pollTimer);
     };
   }, [order.id]);
 
@@ -130,13 +98,11 @@ export default function OrderManageClient({
     setUpdating(nextStatus);
     setFeedback(null);
     try {
-      const supabase = getSupabaseClient();
-      const { error } = await supabase.rpc("update_order_status_by_token", {
-        p_order_id: order.id,
-        p_manage_token: manageToken,
-        p_status: nextStatus,
+      await updateOrderStatus({
+        order_id: order.id,
+        manage_token: manageToken,
+        status: nextStatus,
       });
-      if (error) throw new Error(error.message);
 
       setOrder((prev) => ({ ...prev, status: nextStatus }));
       setFeedback(

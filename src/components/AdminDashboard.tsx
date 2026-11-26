@@ -22,7 +22,19 @@ import {
   KeyRound,
   Loader2,
 } from "lucide-react";
-import { getAdminSupabaseClient } from "@/lib/supabase";
+import {
+  adminDeleteProduct,
+  adminLogin,
+  adminLogout,
+  adminSaveProduct,
+  adminUploadImage,
+  fetchOrdersAdmin,
+  fetchProducts,
+  getStoredAdminSession,
+  saveStoredAdminSession,
+  updateOrderStatus,
+  type AdminSession,
+} from "@/lib/api";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import {
   ORDER_STATUS_CONFIG,
@@ -55,8 +67,9 @@ const EMPTY_FORM: ProductFormState = {
 
 export default function AdminDashboard() {
   const [checkingSession, setCheckingSession] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [session, setSession] = useState<AdminSession | null>(null);
+  const authenticated = Boolean(session);
+  const userEmail = session?.user?.email ?? null;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -74,125 +87,62 @@ export default function AdminDashboard() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+  const [deletingProduct, setDeletingProduct] = useState(false);
 
-  // Check Supabase Auth session on mount
+  // Check stored admin session on mount
   useEffect(() => {
-    const supabase = getAdminSupabaseClient();
-
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        const session = data.session;
-        setAuthenticated(Boolean(session));
-        setUserEmail(session?.user?.email ?? null);
-      })
-      .finally(() => {
-        setCheckingSession(false);
-      });
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setAuthenticated(Boolean(session));
-        setUserEmail(session?.user?.email ?? null);
-      }
-    );
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
+    const stored = getStoredAdminSession();
+    if (stored?.access_token) {
+      setSession(stored);
+    }
+    setCheckingSession(false);
   }, []);
 
-  // Load initial data + subscribe/poll orders when authenticated
+  // Load initial data + poll orders when authenticated
   useEffect(() => {
-    if (!authenticated) return;
-    const supabase = getAdminSupabaseClient();
+    if (!session?.access_token) return;
+    const token = session.access_token;
 
     (async () => {
-      const [productsRes, ordersRes] = await Promise.all([
-        supabase
-          .from("products")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("orders")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(30),
-      ]);
-      if (productsRes.data) setProducts(productsRes.data as Product[]);
-      if (ordersRes.data) setOrders(ordersRes.data as Order[]);
+      try {
+        const [prods, ords] = await Promise.all([
+          fetchProducts(token),
+          fetchOrdersAdmin(token),
+        ]);
+        setProducts(prods);
+        setOrders(ords);
+      } catch {
+        // Token expired or invalid
+        saveStoredAdminSession(null);
+        setSession(null);
+      }
     })();
 
-    if (process.env.NEXT_PUBLIC_ENABLE_REALTIME !== "true") {
-      const timer = setInterval(async () => {
-        const { data } = await supabase
-          .from("orders")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(30);
-        if (data) setOrders(data as Order[]);
-      }, 5000);
-      return () => clearInterval(timer);
-    }
-
-    let channel: ReturnType<ReturnType<typeof getAdminSupabaseClient>["channel"]> | null =
-      null;
-    try {
-      channel = supabase
-        .channel("admin-orders-live")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "orders" },
-          (payload) => {
-            if (payload.eventType === "INSERT") {
-              setOrders((prev) => [payload.new as Order, ...prev]);
-            } else if (payload.eventType === "UPDATE") {
-              const updated = payload.new as Order;
-              setOrders((prev) =>
-                prev.map((o) =>
-                  o.id === updated.id ? { ...o, ...updated } : o
-                )
-              );
-            }
-          }
-        )
-        .subscribe((status) => {
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            supabase.removeChannel(channel!);
-          }
-        });
-    } catch {
-      // ignore
-    }
-
-    return () => {
-      if (channel) {
-        try {
-          supabase.removeChannel(channel);
-        } catch {
-          // ignore
-        }
+    const timer = setInterval(async () => {
+      try {
+        const ords = await fetchOrdersAdmin(token);
+        setOrders(ords);
+      } catch {
+        // ignore transient error
       }
-    };
-  }, [authenticated]);
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [session?.access_token]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     setAuthLoading(true);
     try {
-      const supabase = getAdminSupabaseClient();
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error) {
-        throw new Error("Correo o contraseña incorrectos.");
-      }
+      const nextSession = await adminLogin(email.trim(), password);
+      saveStoredAdminSession(nextSession);
+      setSession(nextSession);
       setPassword("");
     } catch (err) {
       setAuthError(
-        err instanceof Error ? err.message : "No se pudo iniciar sesión."
+        err instanceof Error ? err.message : "Correo o contraseña incorrectos."
       );
     } finally {
       setAuthLoading(false);
@@ -200,9 +150,11 @@ export default function AdminDashboard() {
   };
 
   const handleLogout = async () => {
-    const supabase = getAdminSupabaseClient();
-    await supabase.auth.signOut();
-    setAuthenticated(false);
+    if (session?.access_token) {
+      await adminLogout(session.access_token);
+    }
+    saveStoredAdminSession(null);
+    setSession(null);
     setProducts([]);
     setOrders([]);
   };
@@ -230,30 +182,12 @@ export default function AdminDashboard() {
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !session?.access_token) return;
     setUploadingImage(true);
     setFormError(null);
     try {
-      const supabase = getAdminSupabaseClient();
-      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      const fileName = `prod-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}.${ext}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("product-images")
-        .upload(fileName, file, {
-          contentType: file.type || "image/jpeg",
-          upsert: false,
-        });
-
-      if (uploadError) throw new Error(uploadError.message);
-
-      const { data: publicUrlData } = supabase.storage
-        .from("product-images")
-        .getPublicUrl(fileName);
-
-      setForm((prev) => ({ ...prev, image_url: publicUrlData.publicUrl }));
+      const url = await adminUploadImage(session.access_token, file);
+      setForm((prev) => ({ ...prev, image_url: url }));
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Error subiendo imagen"
@@ -265,6 +199,7 @@ export default function AdminDashboard() {
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!session?.access_token) return;
     setSavingProduct(true);
     setFormError(null);
     try {
@@ -272,7 +207,6 @@ export default function AdminDashboard() {
         throw new Error("El nombre del producto es obligatorio");
       }
 
-      const supabase = getAdminSupabaseClient();
       const payload = {
         name: form.name.trim(),
         description: form.description.trim(),
@@ -281,31 +215,21 @@ export default function AdminDashboard() {
         category: form.category.trim() || "General",
         image_url: form.image_url.trim() || null,
         is_active: form.is_active,
+        ...(form.id ? { updated_at: new Date().toISOString() } : {}),
       };
 
+      const saved = await adminSaveProduct(
+        session.access_token,
+        form.id,
+        payload
+      );
+
       if (form.id) {
-        const { data, error } = await supabase
-          .from("products")
-          .update({ ...payload, updated_at: new Date().toISOString() })
-          .eq("id", form.id)
-          .select()
-          .single();
-        if (error || !data) {
-          throw new Error(error?.message || "No se pudo actualizar");
-        }
         setProducts((prev) =>
-          prev.map((p) => (p.id === (data as Product).id ? (data as Product) : p))
+          prev.map((p) => (p.id === saved.id ? saved : p))
         );
       } else {
-        const { data, error } = await supabase
-          .from("products")
-          .insert(payload)
-          .select()
-          .single();
-        if (error || !data) {
-          throw new Error(error?.message || "No se pudo crear");
-        }
-        setProducts((prev) => [data as Product, ...prev]);
+        setProducts((prev) => [saved, ...prev]);
       }
 
       setIsModalOpen(false);
@@ -318,12 +242,17 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!confirm("¿Eliminar este producto?")) return;
-    const supabase = getAdminSupabaseClient();
-    const { error } = await supabase.from("products").delete().eq("id", id);
-    if (!error) {
-      setProducts((prev) => prev.filter((p) => p.id !== id));
+  const handleDeleteProduct = async () => {
+    if (!productToDelete || !session?.access_token) return;
+    setDeletingProduct(true);
+    try {
+      await adminDeleteProduct(session.access_token, productToDelete.id);
+      setProducts((prev) =>
+        prev.filter((p) => p.id !== productToDelete.id)
+      );
+      setProductToDelete(null);
+    } finally {
+      setDeletingProduct(false);
     }
   };
 
@@ -331,17 +260,19 @@ export default function AdminDashboard() {
     order: Order,
     nextStatus: OrderStatus
   ) => {
-    if (!order.manage_token) return;
-    const supabase = getAdminSupabaseClient();
-    const { error } = await supabase.rpc("update_order_status_by_token", {
-      p_order_id: order.id,
-      p_manage_token: order.manage_token,
-      p_status: nextStatus,
-    });
-    if (!error) {
+    if (!order.manage_token || !session?.access_token) return;
+    try {
+      await updateOrderStatus({
+        order_id: order.id,
+        manage_token: order.manage_token,
+        status: nextStatus,
+        accessToken: session.access_token,
+      });
       setOrders((prev) =>
         prev.map((o) => (o.id === order.id ? { ...o, status: nextStatus } : o))
       );
+    } catch {
+      // ignore
     }
   };
 
@@ -584,7 +515,7 @@ export default function AdminDashboard() {
                     Editar
                   </button>
                   <button
-                    onClick={() => handleDeleteProduct(product.id)}
+                    onClick={() => setProductToDelete(product)}
                     className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
                     title="Eliminar"
                   >
@@ -867,6 +798,53 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {productToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-zinc-950/50 backdrop-blur-xs"
+            onClick={() => !deletingProduct && setProductToDelete(null)}
+          />
+          <div className="relative z-10 w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-stone-200 p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-zinc-900">
+                  Eliminar producto
+                </h3>
+                <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
+                  ¿Seguro que deseas eliminar{" "}
+                  <span className="font-semibold text-zinc-800">
+                    {productToDelete.name}
+                  </span>
+                  ? Esta acción no se puede deshacer.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={deletingProduct}
+                onClick={() => setProductToDelete(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-600 hover:bg-stone-100 cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={deletingProduct}
+                onClick={handleDeleteProduct}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
+              >
+                {deletingProduct ? "Eliminando..." : "Sí, eliminar"}
+              </button>
+            </div>
           </div>
         </div>
       )}

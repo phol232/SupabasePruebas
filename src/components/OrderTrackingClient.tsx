@@ -13,7 +13,7 @@ import {
   Radio,
   Store,
 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import { fetchOrderById } from "@/lib/api";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import { ORDER_STATUS_CONFIG, type Order, type OrderStatus } from "@/types/store";
 
@@ -39,64 +39,27 @@ export default function OrderTrackingClient({
   const [liveConnected, setLiveConnected] = useState(false);
 
   useEffect(() => {
-    const supabase = getSupabaseClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
     let stopped = false;
+    setLiveConnected(true);
 
-    const startPolling = () => {
-      if (pollTimer || stopped) return;
-      setLiveConnected(true);
-      pollTimer = setInterval(async () => {
-        const { data } = await supabase
-          .from("orders")
-          .select("status, updated_at")
-          .eq("id", order.id)
-          .single();
-        if (data && !stopped) {
-          setOrder((prev) => ({ ...prev, ...data }));
-        }
-      }, 3000);
-    };
-
-    if (process.env.NEXT_PUBLIC_ENABLE_REALTIME !== "true") {
-      startPolling();
-      return () => {
-        stopped = true;
-        if (pollTimer) clearInterval(pollTimer);
-      };
-    }
-
-    const channel = supabase
-      .channel(`order-tracking-${order.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "orders",
-          filter: `id=eq.${order.id}`,
-        },
-        (payload) => {
-          const updated = payload.new as Partial<Order>;
+    const pollTimer = setInterval(async () => {
+      try {
+        const fresh = await fetchOrderById(order.id);
+        if (fresh && !stopped) {
           setOrder((prev) => ({
             ...prev,
-            ...updated,
+            status: fresh.status,
+            updated_at: fresh.updated_at,
           }));
         }
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          setLiveConnected(true);
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          supabase.removeChannel(channel);
-          startPolling();
-        }
-      });
+      } catch {
+        // ignore transient network errors
+      }
+    }, 3500);
 
     return () => {
       stopped = true;
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
+      clearInterval(pollTimer);
     };
   }, [order.id]);
 

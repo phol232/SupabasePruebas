@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import { fetchOrderById } from "@/lib/api";
 import OrderTrackingClient from "@/components/OrderTrackingClient";
 import type { Order } from "@/types/store";
 
@@ -27,18 +27,11 @@ function OrderTrackingContent() {
     let cancelled = false;
     (async () => {
       try {
-        const supabase = getSupabaseClient();
-        const { data, error } = await supabase
-          .from("orders")
-          .select("*, order_items(*)")
-          .eq("id", id)
-          .single();
+        const typedOrder = await fetchOrderById(id);
 
         if (cancelled) return;
 
-        const typedOrder = data as Order | null;
         if (
-          error ||
           !typedOrder ||
           (typedOrder.tracking_token !== token &&
             typedOrder.manage_token !== token)

@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import { fetchOrderById } from "@/lib/api";
 import OrderManageClient from "@/components/OrderManageClient";
 import type { Order } from "@/types/store";
 
@@ -27,17 +27,11 @@ function OrderManageContent() {
     let cancelled = false;
     (async () => {
       try {
-        const supabase = getSupabaseClient();
-        const { data, error } = await supabase
-          .from("orders")
-          .select("*, order_items(*)")
-          .eq("id", id)
-          .single();
+        const typedOrder = await fetchOrderById(id);
 
         if (cancelled) return;
 
-        const typedOrder = data as Order | null;
-        if (error || !typedOrder || typedOrder.manage_token !== token) {
+        if (!typedOrder || typedOrder.manage_token !== token) {
           setUnauthorized(true);
         } else {
           setOrder(typedOrder);

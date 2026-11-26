@@ -26,7 +26,10 @@ import {
   Eye,
   CheckCircle2,
 } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase";
+import {
+  fetchProducts,
+  createOrder,
+} from "@/lib/api";
 import {
   STORE_NAME,
   WHATSAPP_NUMBER,
@@ -90,19 +93,14 @@ export default function Storefront() {
     }
   }, [cart, cartHydrated]);
 
-  // Fetch active products on mount (100% static compatible)
+  // Fetch active products on mount via same-origin Cloudflare Function proxy
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const supabase = getSupabaseClient();
-        const { data } = await supabase
-          .from("products")
-          .select("*")
-          .eq("is_active", true)
-          .order("created_at", { ascending: false });
-        if (!cancelled && data) {
-          setProducts(data as Product[]);
+        const data = await fetchProducts();
+        if (!cancelled && Array.isArray(data)) {
+          setProducts(data);
         }
       } catch {
         // ignore
@@ -112,61 +110,6 @@ export default function Storefront() {
     })();
     return () => {
       cancelled = true;
-    };
-  }, []);
-
-  // Subscribe to realtime product/stock updates (only when Realtime WS is enabled)
-  useEffect(() => {
-    if (process.env.NEXT_PUBLIC_ENABLE_REALTIME !== "true") return;
-    let channel: ReturnType<ReturnType<typeof getSupabaseClient>["channel"]> | null =
-      null;
-    try {
-      const supabase = getSupabaseClient();
-      channel = supabase
-        .channel("storefront-products")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "products" },
-          (payload) => {
-            if (payload.eventType === "INSERT") {
-              const incoming = payload.new as Product;
-              if (incoming.is_active) {
-                setProducts((prev) => [incoming, ...prev]);
-              }
-            } else if (payload.eventType === "UPDATE") {
-              const updated = payload.new as Product;
-              setProducts((prev) => {
-                if (!updated.is_active) {
-                  return prev.filter((p) => p.id !== updated.id);
-                }
-                const exists = prev.some((p) => p.id === updated.id);
-                return exists
-                  ? prev.map((p) => (p.id === updated.id ? updated : p))
-                  : [updated, ...prev];
-              });
-            } else if (payload.eventType === "DELETE") {
-              const deleted = payload.old as { id: string };
-              setProducts((prev) => prev.filter((p) => p.id !== deleted.id));
-            }
-          }
-        )
-        .subscribe((status) => {
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            supabase.removeChannel(channel!);
-          }
-        });
-    } catch {
-      // ignore if env not configured yet
-    }
-
-    return () => {
-      if (channel) {
-        try {
-          getSupabaseClient().removeChannel(channel);
-        } catch {
-          // ignore
-        }
-      }
     };
   }, []);
 
@@ -281,31 +224,18 @@ export default function Storefront() {
 
     setSubmitting(true);
     try {
-      const supabase = getSupabaseClient();
       const payloadItems = cart.map((item) => ({
         product_id: item.product.id,
         quantity: item.quantity,
       }));
 
-      const { data, error } = await supabase.rpc("create_order_with_items", {
-        p_customer_name: customerName.trim(),
-        p_customer_phone: customerPhone.trim(),
-        p_delivery_address: deliveryAddress.trim(),
-        p_notes: notes.trim(),
-        p_items: payloadItems,
+      const result = await createOrder({
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim(),
+        delivery_address: deliveryAddress.trim(),
+        notes: notes.trim(),
+        items: payloadItems,
       });
-
-      if (error || !data) {
-        throw new Error(error?.message || "No se pudo registrar el pedido.");
-      }
-
-      const result = data as {
-        order_id: string;
-        order_number: number;
-        total: number;
-        tracking_token: string;
-        manage_token: string;
-      };
 
       const origin =
         process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
