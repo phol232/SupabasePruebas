@@ -37,11 +37,8 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
   // Replace dummy client apikey with the real server-side anon key
   targetUrl.searchParams.set("apikey", anonKey);
 
-  const headers = new Headers(request.headers);
-  headers.set("Host", targetUrl.host);
-
   return fetch(targetUrl.toString(), {
     method: request.method,
-    headers,
+    headers: request.headers,
   });
 };

@@ -26,6 +26,7 @@ import {
   Eye,
   CheckCircle2,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import {
   fetchProducts,
   createOrder,
@@ -93,7 +94,7 @@ export default function Storefront() {
     }
   }, [cart, cartHydrated]);
 
-  // Fetch active products on mount via same-origin Cloudflare Function proxy
+  // Fetch active products on mount + subscribe to live product/stock changes via WS proxy
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -108,8 +109,69 @@ export default function Storefront() {
         if (!cancelled) setLoadingProducts(false);
       }
     })();
+
+    const proxyClient = createClient(window.location.origin, "proxy", {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      realtime: { params: { eventsPerSecond: 10 } },
+    });
+
+    let wsSubscribed = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!wsSubscribed && !cancelled) {
+        proxyClient.removeChannel(channel);
+      }
+    }, 3000);
+
+    const channel = proxyClient
+      .channel("storefront-products-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products" },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const incoming = payload.new as Product;
+            if (incoming.is_active) {
+              setProducts((prev) => [incoming, ...prev]);
+            }
+          } else if (payload.eventType === "UPDATE") {
+            const updated = payload.new as Product;
+            setProducts((prev) => {
+              if (!updated.is_active) {
+                return prev.filter((p) => p.id !== updated.id);
+              }
+              const exists = prev.some((p) => p.id === updated.id);
+              return exists
+                ? prev.map((p) => (p.id === updated.id ? updated : p))
+                : [updated, ...prev];
+            });
+          } else if (payload.eventType === "DELETE") {
+            const deleted = payload.old as { id: string };
+            setProducts((prev) => prev.filter((p) => p.id !== deleted.id));
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          wsSubscribed = true;
+          clearTimeout(fallbackTimer);
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          clearTimeout(fallbackTimer);
+          proxyClient.removeChannel(channel);
+        }
+      });
+
     return () => {
       cancelled = true;
+      clearTimeout(fallbackTimer);
+      proxyClient.removeChannel(channel);
     };
   }, []);
 

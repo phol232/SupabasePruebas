@@ -77,6 +77,14 @@ export default function OrderTrackingClient({
       },
     });
 
+    let wsSubscribed = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!wsSubscribed && !stopped) {
+        proxyClient.removeChannel(channel);
+        startPolling();
+      }
+    }, 3000);
+
     const channel = proxyClient
       .channel(`order-tracking-${order.id}`)
       .on(
@@ -97,8 +105,15 @@ export default function OrderTrackingClient({
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
+          wsSubscribed = true;
+          clearTimeout(fallbackTimer);
           setLiveConnected(true);
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          clearTimeout(fallbackTimer);
           proxyClient.removeChannel(channel);
           startPolling();
         }
@@ -106,6 +121,7 @@ export default function OrderTrackingClient({
 
     return () => {
       stopped = true;
+      clearTimeout(fallbackTimer);
       if (pollTimer) clearInterval(pollTimer);
       proxyClient.removeChannel(channel);
     };

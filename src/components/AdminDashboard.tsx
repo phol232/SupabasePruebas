@@ -23,6 +23,7 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import {
   adminDeleteProduct,
   adminLogin,
@@ -100,10 +101,11 @@ export default function AdminDashboard() {
     setCheckingSession(false);
   }, []);
 
-  // Load initial data once when authenticated (no background polling loop)
+  // Load initial data + subscribe to live orders & products via WS proxy
   useEffect(() => {
     if (!session?.access_token) return;
     const token = session.access_token;
+    let stopped = false;
 
     (async () => {
       try {
@@ -111,14 +113,90 @@ export default function AdminDashboard() {
           fetchProducts(token),
           fetchOrdersAdmin(token),
         ]);
-        setProducts(prods);
-        setOrders(ords);
+        if (!stopped) {
+          setProducts(prods);
+          setOrders(ords);
+        }
       } catch {
         // Token expired or invalid
         saveStoredAdminSession(null);
         setSession(null);
       }
     })();
+
+    const proxyClient = createClient(window.location.origin, "proxy", {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      realtime: { params: { eventsPerSecond: 10 } },
+    });
+
+    let wsSubscribed = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!wsSubscribed && !stopped) {
+        proxyClient.removeChannel(channel);
+      }
+    }, 3000);
+
+    const channel = proxyClient
+      .channel("admin-live-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            setOrders((prev) => [payload.new as Order, ...prev]);
+          } else if (payload.eventType === "UPDATE") {
+            const updated = payload.new as Order;
+            setOrders((prev) =>
+              prev.map((o) =>
+                o.id === updated.id ? { ...o, ...updated } : o
+              )
+            );
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products" },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const incoming = payload.new as Product;
+            setProducts((prev) =>
+              prev.some((p) => p.id === incoming.id) ? prev : [incoming, ...prev]
+            );
+          } else if (payload.eventType === "UPDATE") {
+            const updated = payload.new as Product;
+            setProducts((prev) =>
+              prev.map((p) => (p.id === updated.id ? updated : p))
+            );
+          } else if (payload.eventType === "DELETE") {
+            const deleted = payload.old as { id: string };
+            setProducts((prev) => prev.filter((p) => p.id !== deleted.id));
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          wsSubscribed = true;
+          clearTimeout(fallbackTimer);
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          clearTimeout(fallbackTimer);
+          proxyClient.removeChannel(channel);
+        }
+      });
+
+    return () => {
+      stopped = true;
+      clearTimeout(fallbackTimer);
+      proxyClient.removeChannel(channel);
+    };
   }, [session?.access_token]);
 
   const [refreshingOrders, setRefreshingOrders] = useState(false);

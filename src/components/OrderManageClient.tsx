@@ -14,6 +14,7 @@ import {
   ExternalLink,
   ShieldCheck,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { fetchOrderById, updateOrderStatus } from "@/lib/api";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import { ORDER_STATUS_CONFIG, type Order, type OrderStatus } from "@/types/store";
@@ -71,25 +72,78 @@ export default function OrderManageClient({
 
   useEffect(() => {
     let stopped = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-    const pollTimer = setInterval(async () => {
-      try {
-        const fresh = await fetchOrderById(order.id);
-        if (fresh && !stopped) {
-          setOrder((prev) => ({
-            ...prev,
-            status: fresh.status,
-            updated_at: fresh.updated_at,
-          }));
+    const startPolling = () => {
+      if (pollTimer || stopped) return;
+      pollTimer = setInterval(async () => {
+        try {
+          const fresh = await fetchOrderById(order.id);
+          if (fresh && !stopped) {
+            setOrder((prev) => ({
+              ...prev,
+              status: fresh.status,
+              updated_at: fresh.updated_at,
+            }));
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
+      }, 4000);
+    };
+
+    const proxyClient = createClient(window.location.origin, "proxy", {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      realtime: { params: { eventsPerSecond: 10 } },
+    });
+
+    let wsSubscribed = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!wsSubscribed && !stopped) {
+        proxyClient.removeChannel(channel);
+        startPolling();
       }
-    }, 4000);
+    }, 3000);
+
+    const channel = proxyClient
+      .channel(`order-manage-${order.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `id=eq.${order.id}`,
+        },
+        (payload) => {
+          const updated = payload.new as Partial<Order>;
+          setOrder((prev) => ({ ...prev, ...updated }));
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          wsSubscribed = true;
+          clearTimeout(fallbackTimer);
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          clearTimeout(fallbackTimer);
+          proxyClient.removeChannel(channel);
+          startPolling();
+        }
+      });
 
     return () => {
       stopped = true;
-      clearInterval(pollTimer);
+      clearTimeout(fallbackTimer);
+      if (pollTimer) clearInterval(pollTimer);
+      proxyClient.removeChannel(channel);
     };
   }, [order.id]);
 
