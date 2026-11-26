@@ -13,6 +13,7 @@ import {
   Radio,
   Store,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { fetchOrderById } from "@/lib/api";
 import { STORE_NAME, formatPrice } from "@/lib/format";
 import { ORDER_STATUS_CONFIG, type Order, type OrderStatus } from "@/types/store";
@@ -40,26 +41,73 @@ export default function OrderTrackingClient({
 
   useEffect(() => {
     let stopped = false;
-    setLiveConnected(true);
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-    const pollTimer = setInterval(async () => {
-      try {
-        const fresh = await fetchOrderById(order.id);
-        if (fresh && !stopped) {
+    const startPolling = () => {
+      if (pollTimer || stopped) return;
+      setLiveConnected(true);
+      pollTimer = setInterval(async () => {
+        try {
+          const fresh = await fetchOrderById(order.id);
+          if (fresh && !stopped) {
+            setOrder((prev) => ({
+              ...prev,
+              status: fresh.status,
+              updated_at: fresh.updated_at,
+            }));
+          }
+        } catch {
+          // ignore transient network errors
+        }
+      }, 3500);
+    };
+
+    // Connect Realtime through same-origin Cloudflare Pages WebSocket proxy
+    // Uses a dummy apikey ("proxy") so the real anon key never appears in DevTools
+    const proxyClient = createClient(window.location.origin, "proxy", {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+
+    const channel = proxyClient
+      .channel(`order-tracking-${order.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `id=eq.${order.id}`,
+        },
+        (payload) => {
+          const updated = payload.new as Partial<Order>;
           setOrder((prev) => ({
             ...prev,
-            status: fresh.status,
-            updated_at: fresh.updated_at,
+            ...updated,
           }));
         }
-      } catch {
-        // ignore transient network errors
-      }
-    }, 3500);
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setLiveConnected(true);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          proxyClient.removeChannel(channel);
+          startPolling();
+        }
+      });
 
     return () => {
       stopped = true;
-      clearInterval(pollTimer);
+      if (pollTimer) clearInterval(pollTimer);
+      proxyClient.removeChannel(channel);
     };
   }, [order.id]);
 
